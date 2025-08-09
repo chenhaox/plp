@@ -29,7 +29,9 @@ def generate_object_classes(pallet_dims,
     if not all(isinstance(dim, int) and dim > 0 for dim in pallet_dims):
         raise ValueError("All pallet dimensions must be positive integers.")
     if random_hdl is None:
-        random_hdl = np.random
+        randint = np.random.randint
+    else:
+        randint = random_hdl.integers
     object_classes = []
     pallet_l, pallet_w, pallet_h = pallet_dims
     for i in range(1, num_classes + 1):
@@ -37,11 +39,11 @@ def generate_object_classes(pallet_dims,
         # We'll make the dimensions between 1 and a fraction of the pallet's
         # dimensions to ensure they are not too large.
         # This helps in creating a more realistic packing scenario.
-        obj_l = random_hdl.randint(max(1, pallet_l // 6), max(1, pallet_l // 2))
-        obj_w = random_hdl.randint(max(1, pallet_l // 6), max(1, pallet_w // 2))
-        obj_h = random_hdl.randint(max(1, pallet_l // 6), max(1, pallet_h // 2))
+        obj_l = randint(max(1, pallet_l // 6), max(1, pallet_l // 2))
+        obj_w = randint(max(1, pallet_l // 6), max(1, pallet_w // 2))
+        obj_h = randint(max(1, pallet_l // 6), max(1, pallet_h // 2))
         # Generate a random count for this object class.
-        count = random_hdl.randint(1, 10)
+        count = randint(1, 10)
         object_classes.append({
             'id': i,
             'dims': (obj_l, obj_w, obj_h),

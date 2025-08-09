@@ -409,9 +409,10 @@ class PalletPackingEnv(Env):
         self.item_xy_h_map = {}
         self.item_xyz_num_dict = {}
         self.xy_to_xyz = {}  # (w,d) or (d,w) -> canonical (w0,d0,h)
-        self.initial_objects = generate_object_classes(self.pallet_dims,
-                                                       num_classes=self.item_sku,
-                                                       random_hdl=self._np_random, )
+        self.initial_objects = generate_object_classes((
+            self.pallet_dims[0], self.pallet_dims[1], self.pallet_dims[2],),
+            num_classes=self.item_sku,
+            random_hdl=self._np_random, )
         for obj_class in self.initial_objects:
             w0, d0, h0 = obj_class['dims']
             cnt = obj_class['count']
@@ -621,6 +622,13 @@ class PalletPackingEnv(Env):
 
         plt.draw()
         plt.pause(0.1)  # Pause to allow the plot to update
+
+    def copy(self):
+        """
+        Returns a deep copy of the current environment state.
+        """
+        env = copy.deepcopy(self)
+        return env
 
 
 if __name__ == '__main__':

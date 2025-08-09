@@ -10,9 +10,7 @@ from agent.agent_nn import D3QN
 from rl_env.env import PalletPackingEnv, generate_object_classes
 
 PALLET_DIMENSIONS = (20, 20, 10)  # (width, height, depth)
-OBJECT_CLASSES = generate_object_classes(pallet_dims=PALLET_DIMENSIONS,
-                                         num_classes=10, )
-
+SKU = 5
 # ---- Hyper/Config ----
 SEED = 42
 EPSILON = 0.05  # small exploration for the smoke test
@@ -21,7 +19,7 @@ random.seed(SEED)
 np.random.seed(SEED)
 torch.manual_seed(SEED)
 # 2. Create the environment
-env = PalletPackingEnv(PALLET_DIMENSIONS, OBJECT_CLASSES)
+env = PalletPackingEnv(PALLET_DIMENSIONS, item_sku=SKU, )
 observation = env.reset()
 total_iter_steps = env.total_iter_steps
 # Some D3QN ctors want action count; some infer internally. Adjust as needed.

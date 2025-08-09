@@ -18,7 +18,7 @@ from ray.util.scheduling_strategies import NodeAffinitySchedulingStrategy
 
 import file_utils as fu
 from agent.agent_nn import D3QN
-from rl_env.env import PalletPackingEnv, generate_object_classes
+from rl_env.env import PalletPackingEnv
 from rl_framework.d3qn.pipeline import SharedState, Actor
 from rl_framework.d3qn.learner import Learner
 
@@ -34,10 +34,9 @@ def main(cfg):
     np.random.seed(SEED)
     torch.manual_seed(SEED)
     PALLET_DIMENSIONS = (20, 20, 10)  # (width, height, depth)
-    OBJECT_CLASSES = generate_object_classes(pallet_dims=PALLET_DIMENSIONS,
-                                             num_classes=10, )
+    SKU = 5
     save_path = fu.workdir_d3qn / 'run'
-    env = PalletPackingEnv(PALLET_DIMENSIONS, OBJECT_CLASSES)
+    env = PalletPackingEnv(PALLET_DIMENSIONS, item_sku=SKU, )
     network = D3QN(grid_dim=env.pallet_dims[:3],
                    num_actions=env.action_nums, )
     replay_buffer = ray.remote(PrioritizedReplayBuffer).options(

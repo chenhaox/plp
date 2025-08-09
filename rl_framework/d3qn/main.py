@@ -73,7 +73,7 @@ def init_folder():
     return save_path
 
 
-@hydra.main(config_path='params', config_name=config_name, version_base='1.3')
+@hydra.main(config_path='cfg', config_name=config_name, version_base='1.3')
 def main(cfg):
     ray.init(
         dashboard_host='0.0.0.0',
@@ -88,7 +88,8 @@ def main(cfg):
     # delete all sesstion files in ray
     # setup environment
     PALLET_DIMENSIONS = cfg['env']['pallet_dimensions']
-    env_meta = PalletPackingEnv(PALLET_DIMENSIONS, OBJECT_CLASSES)
+    SKU = cfg['env']['sku']
+    env_meta = PalletPackingEnv(PALLET_DIMENSIONS, SKU)
     # setup neural network
     grid_dim = env_meta.pallet_dims[:3]
     num_actions = env_meta.action_nums
@@ -103,7 +104,7 @@ def main(cfg):
     # start replay buffer
     alpha = .6
     replay_buffer = ray.remote(PrioritizedReplayBuffer).options(
-        num_cpus=3, ).remote(capacity=int(cfg['rl']['replay_sz']), alpha=alpha, )
+        num_cpus=5, ).remote(capacity=int(cfg['rl']['replay_sz']), alpha=alpha, )
     # start shared state
     ckpnt = {'train_steps': 0,
              'weights': network.state_dict(),
@@ -112,10 +113,12 @@ def main(cfg):
              #     'dqn_state_dict'],
              'eval_average_len': 0, }
     print(ckpnt.keys())
-    print(f"Init training level is {ckpnt['training_level']},")
-    shared_state = SharedState.options(num_cpus=1).remote(ckpnt)
+    shared_state = SharedState.options(num_cpus=5).remote(ckpnt)
     # start Learner
-    learner = ray.remote(Learner).options(
+    learner = ray.remote(Learner,
+                         ).options(
+        num_cpus=3,
+        num_gpus=2,
         scheduling_strategy=NodeAffinitySchedulingStrategy(node_id=ray.get_runtime_context().get_node_id(),
                                                            soft=False)).remote(
         net=copy.deepcopy(network),
@@ -125,19 +128,18 @@ def main(cfg):
         log_path=save_path.joinpath('log'), )
     # start actor
     actor_procs = []
-    one_actor_show = False
-    RayActor = ray.remote(Actor)
+    RayActor = ray.remote(Actor, )
     for i in range(cfg['num_actor']):
         env = env_meta.copy()
-        env.set_seed((i + 10) * cfg['env']['seed'])
+        env.seed((i + 10) * cfg['env']['seed'])
         # r_b = replay_buffer
-        actor = RayActor.remote(actor_id=i,
-                                env=env,
-                                net=copy.deepcopy(network),
-                                cfg=cfg['rl'],
-                                replay_buffer=replay_buffer,
-                                shared_state=shared_state,
-                                log_path=save_path.joinpath('log'), )
+        actor = RayActor.options(num_cpus=1).remote(actor_id=i,
+                                                    env=env,
+                                                    net=copy.deepcopy(network),
+                                                    cfg=cfg['rl'],
+                                                    replay_buffer=replay_buffer,
+                                                    shared_state=shared_state,
+                                                    log_path=save_path.joinpath('log'), )
         actor_procs.append(actor)
     print("start learner")
     learner.start.remote()

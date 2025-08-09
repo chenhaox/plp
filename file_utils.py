@@ -8,7 +8,7 @@ from pathlib import Path
 
 # some path for working directories
 workdir = Path(__file__).parent
-workdir_d3qn = workdir.joinpath("rl_frame", "d3qn")
+workdir_d3qn = workdir.joinpath("rl_framework", "d3qn")
 
 def delete_all_files_in_directory(folder_path):
     folder_path = str(folder_path)

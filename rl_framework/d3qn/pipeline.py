@@ -7,7 +7,6 @@ import itertools
 from collections import namedtuple
 import numpy as np
 import torch
-import cv2
 import time
 import copy
 from pathlib import Path

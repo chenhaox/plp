@@ -1,0 +1,7 @@
+rasterio
+shapely
+matplotlib
+ray[default]
+torch
+hydra-core
+gym

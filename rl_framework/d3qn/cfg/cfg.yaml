@@ -3,15 +3,7 @@ defaults:
   - override hydra/hydra_logging: none
   - override hydra/job_logging: none
 
-num_actor: 7
-num_difficult: 100
-#num_reanalyzer: 7
-num_reanalyzer: 4
-num_reanalyzer_added: 7
-num_reanalyzer_added_level: 26
-toggle_actor_debug: False
-toggle_reanalyzer_debug: False
-toggle_replay_buffer_2: False
+num_actor: 10
 
 rl:
   # learning rate
@@ -53,7 +45,7 @@ rl:
 ddqn:
   num_res_block: 3
   num_filters: 32
-  nhead_channels_adv: 8
+  head_channels_adv: 8
   head_channels_val: 8
   manifest_emb_dim: 128
 
@@ -70,6 +62,7 @@ eval:
 
 env:
   pallet_dimensions: [ 20, 20, 10 ]
+  sku: 5
   seed: 888
 
 
