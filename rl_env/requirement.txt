@@ -1,0 +1,3 @@
+rasterize
+shapely
+matplotlib

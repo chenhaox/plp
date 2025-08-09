@@ -1,0 +1,77 @@
+defaults:
+  - _self_
+  - override hydra/hydra_logging: none
+  - override hydra/job_logging: none
+
+num_actor: 7
+num_difficult: 100
+#num_reanalyzer: 7
+num_reanalyzer: 4
+num_reanalyzer_added: 7
+num_reanalyzer_added_level: 26
+toggle_actor_debug: False
+toggle_reanalyzer_debug: False
+toggle_replay_buffer_2: False
+
+rl:
+  # learning rate
+  lr: 1e-3
+  lr_dcay: 0.90
+  # batch size
+  batch_sz: 128
+  # decay factor
+  gamma: .99
+  # epsilon greedy
+  eps_max: 1
+  eps_min: .15
+  #  eps_decay: 1e-6
+  eps_decay: 3e-3
+  # n-step TD error
+  n_step: 1
+  # randomizer seed
+  seed: 999
+  # DQN parameters
+  ## target network update frequency
+  update_freq: 300
+  ## soft update
+  tau: .95
+  # Replay buffer parameters
+  replay_sz: 60e5
+  init_replay_num: 5e4
+  beta_decay_step: 60000
+  beta_init: .6
+  # device cpu or cuda
+  device: 'cpu'
+  actor_device: 'cpu'
+  # Ape-x DQN
+  ## periodically send data to replay.
+  send_period: 10
+  # save checkpoint
+  ## period
+  save_period: 500
+
+ddqn:
+  num_res_block: 3
+  num_filters: 32
+  nhead_channels_adv: 8
+  head_channels_val: 8
+  manifest_emb_dim: 128
+
+eval:
+  eval_num: 200
+  reset_multiplier: 1.5
+  reset_multiplier2: 2
+  reset_evolve: 13
+  eval_interval: 15
+  device: 'cuda'
+  state_level: 2
+  class_level: 1
+  pass_rate: 0.97
+
+env:
+  pallet_dimensions: [ 20, 20, 10 ]
+  seed: 888
+
+
+
+
