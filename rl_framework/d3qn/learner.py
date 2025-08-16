@@ -142,7 +142,8 @@ class Learner(object):
         device = self.device  # for shortening the following lines
         gamma = self.gamma
         state_hm = torch.as_tensor(samples['states_hm'].copy(), dtype=torch.float32, device=device).unsqueeze(1)
-        next_state_hm = torch.as_tensor(samples['next_states_hm'].copy(), dtype=torch.float32, device=device).unsqueeze(1)
+        next_state_hm = torch.as_tensor(samples['next_states_hm'].copy(), dtype=torch.float32, device=device).unsqueeze(
+            1)
         state_dp = torch.as_tensor(samples['states_dp'].copy(), dtype=torch.float32, device=device)
         next_state_dp = torch.as_tensor(samples['next_states_dp'].copy(), dtype=torch.float32, device=device)
         state_manifest = torch.as_tensor(samples['states_manifest'].copy(), dtype=torch.float32, device=device)
@@ -216,10 +217,11 @@ class Learner(object):
         #     for param_group in self.optimizer.param_groups:
         #         param_group['lr'] = self.lr
 
-    def start(self, num_epoch=1000000000, min_replay_sz=1000, output_interval=100):
+    def start(self, num_epoch=1000000000, min_replay_sz=8000, output_interval=50):
         # wait for the replay buffer have enough samples
         while ray.get(self.replay_buffer.__len__.remote()) <= min_replay_sz:
             time.sleep(1)
+        print("Finish Waiting. Start training...")
         if self.log_path is not None and isinstance(self.log_path, fu.Path):
             writer = CsvWriter(str(self.log_path.joinpath(f'train_log.csv')))
         # start training
@@ -253,7 +255,7 @@ class Learner(object):
                         optimizer=self.optimizer,
                         train_steps=epoch,
                     ), self.save_checkpnt_path)
-
+                    print(f"Save checkpoint to {self.save_checkpnt_path} at epoch {epoch}")
             if epoch % output_interval == 0:
                 # logging
                 if self.log_path is not None and isinstance(self.log_path, fu.Path):
@@ -264,12 +266,19 @@ class Learner(object):
                         ('learner_train_loss', loss, '%1f'),
                         ('learner_learning_rate', self.optimizer.param_groups[0]['lr'], '%1f'),
                         ('epoch', epoch, '%1d'),
-                        ('loss', (loss_total - rnd_loss_total) / loss_interval_counter, '%1f'),
-                        ('rnd_loss', rnd_loss_total / loss_interval_counter, '%1f'),
+                        ('loss', (loss_total) / loss_interval_counter, '%1f'),
                         ('beat', self.beta, '%1f')
                     ])
-                loss_total = 0
-                loss_interval_counter = 0
+                    print(
+                        f"[Learner] {get_time_stamp()} |"
+                        f" epoch: {epoch} |"
+                        f" avg_loss: {(loss_total) / loss_interval_counter:.7f} |"
+                        f" time: {c_time:.4f}s |"
+                        f" lr: {self.optimizer.param_groups[0]['lr']:.6f} |"
+                        f" beta: {self.beta:.4f}"
+                    )
+                    loss_total = 0
+                    loss_interval_counter = 0
 
 
 if __name__ == '__main__':

@@ -10,14 +10,14 @@ rl:
   lr: 1e-3
   lr_dcay: 0.90
   # batch size
-  batch_sz: 128
+  batch_sz: 64
   # decay factor
   gamma: .99
   # epsilon greedy
   eps_max: 1
   eps_min: .15
   #  eps_decay: 1e-6
-  eps_decay: 3e-3
+  eps_decay: 2e-3
   # n-step TD error
   n_step: 1
   # randomizer seed
@@ -28,12 +28,12 @@ rl:
   ## soft update
   tau: .95
   # Replay buffer parameters
-  replay_sz: 60e5
+  replay_sz: 6000000
   init_replay_num: 5e4
   beta_decay_step: 60000
-  beta_init: .6
+  beta_init: .7
   # device cpu or cuda
-  device: 'cpu'
+  device: 'cuda'
   actor_device: 'cpu'
   # Ape-x DQN
   ## periodically send data to replay.
@@ -41,13 +41,14 @@ rl:
   # save checkpoint
   ## period
   save_period: 500
+  sync_dqn_freq: 50
 
 ddqn:
-  num_res_block: 3
-  num_filters: 32
-  head_channels_adv: 8
-  head_channels_val: 8
-  manifest_emb_dim: 128
+  num_res_block: 2
+  num_filters: 18
+  head_channels_adv: 4
+  head_channels_val: 4
+  manifest_emb_dim: 64
 
 eval:
   eval_num: 200
@@ -61,7 +62,7 @@ eval:
   pass_rate: 0.97
 
 env:
-  pallet_dimensions: [ 20, 20, 10 ]
+  pallet_dimensions: [ 10, 10, 10 ]
   sku: 5
   seed: 888
 

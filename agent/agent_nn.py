@@ -46,9 +46,12 @@ class ManifestEncoder(nn.Module):
     Output: pooled embedding g [B, E]
     """
 
-    def __init__(self, phi_hidden=128, emb_dim=128):
+    def __init__(self, W, D, H_max, phi_hidden=128, emb_dim=128):
         super().__init__()
         in_feats = 8  # w_min, d_max, h, area, vol, aspect, is_square, count
+        self.W = W
+        self.D = D
+        self.H_max = H_max
         self.phi = MLP([in_feats, phi_hidden, phi_hidden])
         # Pool: weighted sum and max, then rho
         self.rho = MLP([2 * phi_hidden, emb_dim])
@@ -56,10 +59,13 @@ class ManifestEncoder(nn.Module):
     def forward(self, items: torch.Tensor) -> torch.Tensor:
         # items: [B, N, 4] -> (w, d, h, c)
         w, d, h, c = items.unbind(dim=-1)
-        w_min = torch.minimum(w, d)
-        d_max = torch.maximum(w, d)
-        area = w * d
-        vol = area * h
+        w_norm = w / self.W  # normalize by W
+        d_norm = d / self.D  # normalize by D
+        h_norm = h / self.H_max  # normalize by H_max
+        w_min = torch.minimum(w_norm, d_norm)
+        d_max = torch.maximum(w_norm, d_norm)
+        area = w_min * d_max  # area = min(w, d) * max(w, d)
+        vol = area * h_norm  # volume = area * h
         aspect = w_min / (d_max.clamp_min(1e-6))
         is_square = (w == d).float()
 
@@ -108,7 +114,7 @@ class D3QN(nn.Module):
         super().__init__()
         self.W, self.D, self.H_max = grid_dim
         self.num_actions = num_actions
-        C_in = 6
+        C_in = 5
         self.stem = nn.Sequential(
             nn.Conv2d(C_in, num_filters, 3, 1, 1, bias=False),
             nn.ELU(),
@@ -116,22 +122,44 @@ class D3QN(nn.Module):
         self.body = nn.Sequential(*[ResNetBlock(num_filters) for _ in range(num_res_block)])
 
         # DeepSets encoder + FiLM
-        self.manifest_enc = ManifestEncoder(phi_hidden=128, emb_dim=manifest_emb_dim)
-        self.film = FiLM(num_filters, manifest_emb_dim)
+        # self.manifest_enc = ManifestEncoder(
+        #     W=self.W,
+        #     D=self.D,
+        #     H_max=self.H_max,
+        #     phi_hidden=manifest_emb_dim,
+        #     emb_dim=manifest_emb_dim)
+        # self.film = FiLM(num_filters, manifest_emb_dim)
 
         flat = self.W * self.D
-        self.adv_head = nn.Sequential(
-            nn.Conv2d(num_filters, head_channels_adv, 1, 1, bias=False),
+        # self.adv_head = nn.Sequential(
+        #     nn.Conv2d(num_filters, head_channels_adv, 1, 1, bias=False),
+        #     nn.ELU(),
+        #     nn.Flatten(),
+        #     nn.Linear(head_channels_adv * flat, self.num_actions),
+        # )
+        # self.val_head = nn.Sequential(
+        #     nn.Conv2d(num_filters, head_channels_val, 1, 1, bias=False),
+        #     nn.ELU(),
+        #     nn.Flatten(),
+        #     nn.Linear(head_channels_val * flat, 1),
+        # )
+
+        # Advantage head (spatial): [B, C, W, D] -> [B, 1, W, D] -> [B, W*D]
+        self.adv_head_spatial = nn.Sequential(
+            nn.Conv2d(num_filters, head_channels_adv, kernel_size=1, bias=False),
             nn.ELU(),
-            nn.Flatten(),
-            nn.Linear(head_channels_adv * flat, self.num_actions),
+            nn.Conv2d(head_channels_adv, 1, kernel_size=1, bias=True),
         )
-        self.val_head = nn.Sequential(
-            nn.Conv2d(num_filters, head_channels_val, 1, 1, bias=False),
+
+        # Value head (global): [B, C, W, D] -> GAP -> [B, C] -> [B, 1]
+        self.val_head_global = nn.Sequential(
+            nn.Conv2d(num_filters, head_channels_val, kernel_size=1, bias=False),
             nn.ELU(),
-            nn.Flatten(),
-            nn.Linear(head_channels_val * flat, 1),
         )
+        self.val_fc = nn.Linear(head_channels_val, 1)
+        # DoNothing advantage logit from pooled features
+        self.pool_for_dn = nn.AdaptiveAvgPool2d((1, 1))
+        self.donothing_fc = nn.Linear(num_filters, 1)
 
         # Register coord maps (buffers so they travel with device/dtype)
         xx, yy = torch.meshgrid(
@@ -139,8 +167,8 @@ class D3QN(nn.Module):
             torch.linspace(0, 1, self.D),
             indexing='ij'
         )
-        self.register_buffer("coord_x", xx.clone().unsqueeze(0).unsqueeze(0))  # [1,1,H,W]
-        self.register_buffer("coord_y", yy.clone().unsqueeze(0).unsqueeze(0))
+        # self.register_buffer("coord_x", xx.clone().unsqueeze(0).unsqueeze(0))  # [1,1,H,W]
+        # self.register_buffer("coord_y", yy.clone().unsqueeze(0).unsqueeze(0))
 
     def _make_spatial_input(
             self,
@@ -155,20 +183,25 @@ class D3QN(nn.Module):
         free_norm = (self.H_max - height_map) / float(self.H_max)
 
         # pd mask
-        pd_mask = torch.zeros((B, 1, W, D), device=height_map.device, dtype=height_map.dtype)
-        xs = pd_xy[:, 0].long().clamp(0, W - 1)
-        ys = pd_xy[:, 1].long().clamp(0, D - 1)
-        pd_mask[torch.arange(B), 0, xs, ys] = 1.0
+        # pd_mask = torch.zeros((B, 1, W, D), device=height_map.device, dtype=height_map.dtype)
+        # xs = pd_xy[:, 0].long().clamp(0, W - 1)
+        # ys = pd_xy[:, 1].long().clamp(0, D - 1)
+        # pd_mask[torch.arange(B), 0, xs, ys] = 1.0
 
-        # z-plane
-        z_norm = (z_start.view(B, 1, 1, 1).to(height_map.dtype)) / float(self.H_max)
-        z_plane = z_norm.expand(B, 1, W, D)
+        # normalized decision-point planes (slight fix: divide by (W-1),(D-1))
+        xs = (pd_xy[:, 0].float() / max(W - 1, 1)).view(B, 1, 1, 1)
+        ys = (pd_xy[:, 1].float() / max(D - 1, 1)).view(B, 1, 1, 1)
+        xs_plane = xs.expand(B, 1, W, D)
+        ys_plane = ys.expand(B, 1, W, D)
+
+        z_plane = (z_start.view(B, 1, 1, 1).float() / float(self.H_max)).expand(B, 1, W, D)
 
         # coord channels
-        coord_x = self.coord_x.expand(B, -1, -1, -1)
-        coord_y = self.coord_y.expand(B, -1, -1, -1)
+        # coord_x = self.coord_x.expand(B, -1, -1, -1)
+        # coord_y = self.coord_y.expand(B, -1, -1, -1)
 
-        x = torch.cat([height_norm, free_norm, pd_mask, z_plane, coord_x, coord_y], dim=1)
+        # x = torch.cat([height_norm, free_norm, pd_mask, z_plane, coord_x, coord_y], dim=1)
+        x = torch.cat([height_norm, free_norm, xs_plane, ys_plane, z_plane, ], dim=1)
         return x
 
     def forward(self,
@@ -176,12 +209,38 @@ class D3QN(nn.Module):
                 dp_xy: torch.Tensor,  # [B,2]
                 z_start: torch.Tensor,  # [B]
                 manifest: torch.Tensor,  # [B,N,4] (w,d,h,c)
+                action_mask: Optional[torch.Tensor] = None,  # [B, W*D+1] boolean; True=valid
                 ) -> torch.Tensor:
-        g = self.manifest_enc(manifest)  # [B,E]
+        # g = self.manifest_enc(manifest)  # [B,E]
         x0 = self._make_spatial_input(height_map, dp_xy, z_start)
         f = self.body(self.stem(x0))
-        f = self.film(f, g)  # condition on manifest
-        advantage = self.adv_head(f)  # [B, A]
-        value = self.val_head(f)  # [B, 1]
-        q = value + advantage - advantage.mean(dim=1, keepdim=True)
+        # f = self.film(f, g)  # condition on manifest
+        # advantage = self.adv_head(f)  # [B, A]
+        # value = self.val_head(f)  # [B, 1]
+        # q = value + advantage - advantage.mean(dim=1, keepdim=True)
+        # Per-cell advantages (flatten to [B, W*D])
+        adv_map = self.adv_head_spatial(f).squeeze(1)  # [B, W, D]
+        adv_flat = adv_map.flatten(start_dim=1)  # [B, W*D]
+
+        # DoNothing advantage
+        pooled = self.pool_for_dn(f).squeeze(-1).squeeze(-1)  # [B, C]
+        adv_dn = self.donothing_fc(pooled)  # [B, 1]
+
+        advantage = torch.cat([adv_flat, adv_dn], dim=1)  # [B, W*D+1]
+
+        # State value
+        v_feat = self.val_head_global(f)  # [B, C', W, D]
+        v_gap = v_feat.mean(dim=(2, 3))  # [B, C']
+        value = self.val_fc(v_gap)  # [B, 1]
+        # Dueling combine with MASK-AWARE mean subtraction
+        if action_mask is not None:
+            # prevent divide-by-zero if mask is all False (rare; then default to plain mean)
+            valid_counts = action_mask.sum(dim=1, keepdim=True).clamp_min(1)
+            masked_adv_mean = (advantage * action_mask).sum(dim=1, keepdim=True) / valid_counts
+            q = value + advantage - masked_adv_mean
+            # hard-mask invalid actions to a big negative number
+            very_neg = torch.finfo(q.dtype).min / 8  # stable large negative
+            q = torch.where(action_mask, q, very_neg)
+        else:
+            q = value + advantage - advantage.mean(dim=1, keepdim=True)
         return q

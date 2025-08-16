@@ -1,7 +1,6 @@
 rasterio
 shapely
 matplotlib
-ray[default]
-torch
+ray[all]
 hydra-core
 gym

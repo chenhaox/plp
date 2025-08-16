@@ -116,10 +116,11 @@ def _encode_state_for_dqn(state: EnvState, device: str) -> torch.Tensor:
     z_start = dp_coord[2]
     return (torch.as_tensor(hmap[None, None],
                             device=device, dtype=torch.float32),
-            torch.tensor([dp_xy]),
-            torch.tensor([z_start]),
-            torch.tensor(manifest_list,
-                         dtype=torch.float32).unsqueeze(0).repeat(1, 1, 1)
+            torch.as_tensor(dp_xy[None], device=device, dtype=torch.float32),
+            torch.tensor([z_start], device=device, dtype=torch.float32),
+            torch.as_tensor(manifest_list,
+                            device=device,  # (N, 3) where N is the number of items
+                            dtype=torch.float32).unsqueeze(0).repeat(1, 1, 1)
             )
 
 
@@ -208,7 +209,7 @@ class Actor(object):
         self.min_epsilon = cfg['eps_min']
         self.epsilon_scheduler = EpsilonScheduler(self.max_epsilon, self.min_epsilon, self.epsilon_decay)
         # hyper-parameter
-        self.target_update_freq = cfg['update_freq']
+        self.sync_dqn_freq = cfg['sync_dqn_freq']
         self.send_period = cfg['send_period']  # periodically send data to replay
         # log_path
         self.log_path = Path(log_path) if log_path is not None else None
@@ -244,6 +245,8 @@ class Actor(object):
             )
             if feasible_action_set.size == 0:
                 return ActorAction(action_value=np.array([]), action_select=env.DO_NOTHING_ACTION_IDX)
+            if feasible_action_set.size == 1:
+                return ActorAction(action_value=np.array([]), action_select=feasible_action_set[0])
             selected_action = dqn_select_action(state=state,
                                                 dqn=self.dqn,
                                                 device=self.device,
@@ -251,17 +254,20 @@ class Actor(object):
         return selected_action
 
     def store_traj_list(self, ):
+        """Store trajectory list to replay buffer"""
+        # print(f"Actor {self._actor_id} storing trajectory list to replay buffer.")
         samples = self.trajectory_list[0][:]
         for traj in self.trajectory_list[1:]:
-            samples = samples.concat(traj[:])  # concat trajectory
+            s = traj[:]
+            samples = samples.concat(s)  # concat trajectory
         self.replay_buffer.add.remote(samples)
         del self.trajectory_list[:]
 
-    def start(self, output_interval=100):
+    def start(self, output_interval=4):
         """Actor starts"""
         env = self.env
         action_nums = env.action_nums
-        target_update_freq = self.target_update_freq
+        sync_dqn_freq = self.sync_dqn_freq
         if self.log_path is not None and isinstance(self.log_path, Path):
             writer = CsvWriter(str(self.log_path.joinpath(f'actor_{self._actor_id}_log.csv')))
         # ====
@@ -295,20 +301,21 @@ class Actor(object):
                 score += reward  # reward
                 reset_cnt += 1
                 step += 1
-                # store trajectory
-                traj.add_transition(state,
-                                    action.action_select,
-                                    reward,
-                                    next_state,
-                                    done,
-                                    next_state_feasible_actions=env.cal_feasible_action(
-                                        next_state.dp_coord,
-                                        next_state
-                                    ), )
+                if done or action.action_select != self.env.DO_NOTHING_ACTION_IDX:
+                    # store trajectory
+                    traj.add_transition(state,
+                                        action.action_select,
+                                        reward,
+                                        next_state,
+                                        done,
+                                        next_state_feasible_actions=env.cal_feasible_action(
+                                            next_state.dp_coord,
+                                            next_state
+                                        ), )
                 # reset state# reset state
                 state = next_state
                 # update
-                if step % target_update_freq == 0:
+                if step % sync_dqn_freq == 0:
                     self.sync_dqn_checkpoint()
                 # if episode ends
                 if done:  # done
@@ -336,6 +343,12 @@ class Actor(object):
                     ('epsilon', self.epsilon, '%1f'),
                     ('episode', episode, '%1f'),
                 ])
+                if self.toggle_visual:
+                    print(f"[Actor {self._actor_id}] {get_time_stamp()} | step: {step}, |"
+                          f"acc_rewards: {score}, |"
+                          f"time: {(end_ep_t - start_ep_t) / output_interval:.4f}s, |"
+                          f"epsilon: {self.epsilon}, |"
+                          f"episode: {episode}, |")
 
 
 if __name__ == '__main__':

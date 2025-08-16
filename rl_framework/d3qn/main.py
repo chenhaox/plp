@@ -73,7 +73,7 @@ def init_folder():
     return save_path
 
 
-@hydra.main(config_path='cfg', config_name=config_name, version_base='1.3')
+@hydra.main(config_path='cfg', config_name=config_name, version_base='1.3', )
 def main(cfg):
     ray.init(
         dashboard_host='0.0.0.0',
@@ -104,7 +104,7 @@ def main(cfg):
     # start replay buffer
     alpha = .6
     replay_buffer = ray.remote(PrioritizedReplayBuffer).options(
-        num_cpus=5, ).remote(capacity=int(cfg['rl']['replay_sz']), alpha=alpha, )
+        num_cpus=3, ).remote(capacity=int(cfg['rl']['replay_sz']), alpha=alpha, )
     # start shared state
     ckpnt = {'train_steps': 0,
              'weights': network.state_dict(),
@@ -113,22 +113,23 @@ def main(cfg):
              #     'dqn_state_dict'],
              'eval_average_len': 0, }
     print(ckpnt.keys())
-    shared_state = SharedState.options(num_cpus=5).remote(ckpnt)
+    shared_state = SharedState.options(num_cpus=2).remote(ckpnt)
     # start Learner
     learner = ray.remote(Learner,
                          ).options(
-        num_cpus=3,
-        num_gpus=2,
+        num_gpus=1,
         scheduling_strategy=NodeAffinitySchedulingStrategy(node_id=ray.get_runtime_context().get_node_id(),
                                                            soft=False)).remote(
         net=copy.deepcopy(network),
         cfg=cfg['rl'],
         shared_state=shared_state,
         replay_buffer=replay_buffer,
+        save_path=save_path.joinpath('data'),
         log_path=save_path.joinpath('log'), )
     # start actor
     actor_procs = []
     RayActor = ray.remote(Actor, )
+    toggle_show = True
     for i in range(cfg['num_actor']):
         env = env_meta.copy()
         env.seed((i + 10) * cfg['env']['seed'])
@@ -139,12 +140,17 @@ def main(cfg):
                                                     cfg=cfg['rl'],
                                                     replay_buffer=replay_buffer,
                                                     shared_state=shared_state,
-                                                    log_path=save_path.joinpath('log'), )
+                                                    log_path=save_path.joinpath('log'),
+                                                    toggle_visual=toggle_show,
+                                                    )
+        toggle_show = False
         actor_procs.append(actor)
+        actor.start.remote()
+        time.sleep(.5)
     print("start learner")
     learner.start.remote()
     print("start actor")
-    [actor.start.remote() for actor in actor_procs]
+    # [actor.start.remote() for actor in actor_procs]
 
     while True:
         buff_len1 = ray.get(replay_buffer.__len__.remote())

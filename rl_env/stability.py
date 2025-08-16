@@ -34,12 +34,12 @@ def calculate_stability(new_item,
     """
     x_start, y_start = int(new_item.x), int(new_item.y)
     x_end, y_end = x_start + int(new_item.w), y_start + int(new_item.d)
-    if x_end > height_map.shape[1] or y_end > height_map.shape[0]:
+    if x_end > height_map.shape[0] or y_end > height_map.shape[1]:
         return {"is_stable": False, "support_polygon": None, "reason": "Item out of bounds."}
-    footprint_h_map = height_map[y_start:y_end, x_start:x_end]
+    footprint_h_map = height_map[x_start:x_end, y_start:y_end]
     support_height = np.max(footprint_h_map)
     new_item.z = support_height
-    footprint_f_map = feasibility_map[y_start:y_end, x_start:x_end, int(support_height)]
+    footprint_f_map = feasibility_map[x_start:x_end, y_start:y_end, int(support_height)]
     # A point provides valid support if it's at the correct height AND it's a stable LBCP surface.
     contact_mask = (footprint_h_map == support_height)
     valid_support_mask = contact_mask & footprint_f_map
@@ -51,7 +51,7 @@ def calculate_stability(new_item,
                 "reason": "No support points."}
     # For accurate convex hull, use all four corners of each valid grid cell
     hull_points = []
-    for r_local, c_local in valid_cells_local:
+    for c_local, r_local in valid_cells_local:
         gx, gy = c_local + x_start, r_local + y_start
         hull_points.extend([(gx, gy), (gx + 1, gy), (gx, gy + 1), (gx + 1, gy + 1)])  # assume a grid
         # hull_points.append((gx, gy))
@@ -83,7 +83,7 @@ def calculate_stability(new_item,
     }
     # For visualization, get the center points of the valid grid cells
     if toggle_viz:
-        support_points_for_viz = valid_cells_local + np.array([y_start, x_start])
+        support_points_for_viz = valid_cells_local + np.array([x_start, y_start])
         support_points_for_viz = support_points_for_viz[:, [1, 0]]
         results["support_points"] = support_points_for_viz
     return results
@@ -95,11 +95,11 @@ def update_maps(item, support_height, support_polygon, height_map, feasibility_m
     x_end, y_end = x_start + int(item.w), y_start + int(item.d)
     height_map = height_map.copy()
     feasibility_map = feasibility_map.copy()
-    height_map[y_start:y_end, x_start:x_end] = item.z + item.h
+    height_map[x_start:x_end, y_start:y_end] = item.z + item.h
     if support_polygon:
         height_s = int(support_height) + item.h
         if height_s >= feasibility_map.shape[2]:
-            print("Support height exceeds feasibility map height dimension.")
+            # print("Support height exceeds feasibility map height dimension.")
             return height_map, feasibility_map
         # TODO it seems the polygon shape may 1 pixel smaller than expected?
         bool_array = rasterize(
@@ -109,7 +109,7 @@ def update_maps(item, support_height, support_polygon, height_map, feasibility_m
             dtype=np.int8,
             all_touched=False  # Set to True if you want partially covered pixels too
         )
-        feasibility_map[..., height_s] = feasibility_map[..., height_s] | bool_array.astype(bool)
+        feasibility_map[..., height_s] = feasibility_map[..., height_s] | bool_array.astype(bool).T
     return height_map, feasibility_map
 
 
@@ -203,7 +203,7 @@ def plot_scene(step_title, items, feasibility_map, bin_dims, analysis_item=None,
     # --- 3. Analysis Plot ---
     ax3 = fig.add_subplot(1, 3, 3)
     ax3.set_title("Analysis: Support & CoG")
-    ax3.set_xlim(0, bin_dims['w']);
+    ax3.set_xlim(0, bin_dims['w'])
     ax3.set_ylim(0, bin_dims['d'])
     ax3.set_aspect('equal', adjustable='box')
     ax3.grid(True, linestyle=':')
@@ -239,7 +239,7 @@ def plot_scene(step_title, items, feasibility_map, bin_dims, analysis_item=None,
 
 # --- MAIN SCRIPT ---
 if __name__ == '__main__':
-    BIN_DIMS = {'w': 50, 'd': 50, 'h': 50}
+    BIN_DIMS = {'w': 20, 'd': 20, 'h': 30}
 
     print("--- Starting Stability Simulation ---")
     print("NOTE: Close each plot window to proceed to the next step.")
@@ -277,19 +277,19 @@ if __name__ == '__main__':
     items.append(second_item)
 
     # --- Step 4: Test a STABLE placement ---
-    test_item_stable = Item(dimensions=[10, 10, 5], position=[0, 8, 20], color='orange', name='C')
+    test_item_stable = Item(dimensions=[10, 10, 10], position=[0, 8, 20], color='orange', name='C')
     print(f"\nStep 4: Testing a stable placement for Item '{test_item_stable.name}'.")
     result = calculate_stability(test_item_stable, height_map, feasibility_map, 0.1)
     plot_scene(f"Test Stable Item '{test_item_stable.name}' - Result: {result['is_stable']}", items, feasibility_map,
                BIN_DIMS,
                analysis_item=test_item_stable, analysis_result=result)
-
-    # --- Step 5: Test an UNSTABLE placement ---
-    test_item_unstable = Item(dimensions=[10, 10, 5], position=[20, 20, 0], color='purple', name='D')
-    print(f"\nStep 5: Testing an unstable placement for Item '{test_item_unstable.name}'.")
-    result = calculate_stability(test_item_unstable, height_map, feasibility_map, 0.1)
-    plot_scene(f"Test Unstable Item '{test_item_unstable.name}' - Result: {result['is_stable']}", items,
-               feasibility_map, BIN_DIMS,
-               analysis_item=test_item_unstable, analysis_result=result)
+    #
+    # # --- Step 5: Test an UNSTABLE placement ---
+    # test_item_unstable = Item(dimensions=[10, 10, 5], position=[20, 20, 0], color='purple', name='D')
+    # print(f"\nStep 5: Testing an unstable placement for Item '{test_item_unstable.name}'.")
+    # result = calculate_stability(test_item_unstable, height_map, feasibility_map, 0.1)
+    # plot_scene(f"Test Unstable Item '{test_item_unstable.name}' - Result: {result['is_stable']}", items,
+    #            feasibility_map, BIN_DIMS,
+    #            analysis_item=test_item_unstable, analysis_result=result)
 
     print("\nSimulation finished.")

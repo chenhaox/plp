@@ -42,7 +42,7 @@ def main(cfg):
     ckpnt = {'weights': network.state_dict(),
              'training_level': 60, }
     shared_state = SharedState.remote(ckpnt)
-    cfg['rl']['send_period'] = 1
+    cfg['rl']['send_period'] = 5
     actor = Actor(actor_id=1,
                   env=copy.deepcopy(env),
                   net=copy.deepcopy(network),

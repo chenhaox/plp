@@ -134,6 +134,53 @@ class EnvState:
         xmin, xmax, ymin, ymax = bbox
         return int(self.height_map[xmin:xmax, ymin:ymax].sum())
 
+    def _fits_any_item_collision_free(self, coord) -> bool:
+        """
+        Fast check: does ANY remaining item (either orientation) fit at coord
+        using only bounds + collision (no stability)?
+        """
+        x0, y0, z0 = coord
+        X, Y, Z = self.pallet_space.shape
+        # quick reject if no inventory
+        if not self.item_xyz_num_dict:
+            return False
+
+        # iterate over remaining SKUs
+        for (w0, d0, h0), cnt in self.item_xyz_num_dict.items():
+            if cnt <= 0:
+                continue
+            # try both orientations
+            for (w, d) in ((w0, d0), (d0, w0)):
+                # bounds
+                if x0 + w > X or y0 + d > Y or z0 + h0 > Z:
+                    continue
+                # collision
+                sub = self.pallet_space[x0:x0 + w, y0:y0 + d, z0:z0 + h0]
+                if not np.any(sub):  # empty == collision-free
+                    return True
+        return False
+
+    def _next_unoccupied_after(self, start_idx: int, pallet_space: np.ndarray) -> int:
+        """
+        Returns the first scan index >= start_idx whose voxel is empty (0).
+        If none remain, clamps to the last index.
+        """
+        if self._grid is None:
+            # fall back to current pallet shape if needed
+            self._grid = generate_grid(dimensions=pallet_space.shape[:3])
+
+        N = len(self._grid)
+        idx = start_idx
+        while idx < N:
+            # x, y, z = self._grid[idx]
+            # if pallet_space[x, y, z] == 0:
+            #     break
+            if self._fits_any_item_collision_free(self._grid[idx]):
+                break
+            idx += 1
+        # clamp so dp_coord stays valid even if everything is full
+        return min(idx, N - 1)
+
     @property
     def compactness(self) -> float:
         occ = self._occupied_volume()
@@ -192,7 +239,8 @@ class EnvState:
         item_xyz_num_dict = self.item_xyz_num_dict.copy()
         key = tuple(inv_key_dims)
         item_xyz_num_dict[key] -= 1
-        return EnvState(self.scan_index + 1,
+        next_scan_idx = self._next_unoccupied_after(self.scan_index + 1, pallet_space)
+        return EnvState(next_scan_idx,
                         height_map,
                         feasibility_map,
                         pallet_space,
@@ -202,7 +250,8 @@ class EnvState:
         """
         Returns a new environment state without any action taken.
         """
-        return EnvState(self.scan_index + 1,
+        next_scan_idx = self._next_unoccupied_after(self.scan_index + 1, self.pallet_space)
+        return EnvState(next_scan_idx,
                         self.height_map.copy(),
                         self.feasibility_map.copy(),
                         self.pallet_space.copy(),
@@ -301,7 +350,10 @@ class PalletPackingEnv(Env):
 
         # --- For RL ---
         # self.remaining_objects = []
-        self.initial_objects = None
+        self.initial_objects = [{'id': 1, 'dims': (3, 3, 2), 'count': 3}, {'id': 2, 'dims': (6, 6, 3), 'count': 8},
+                                {'id': 3, 'dims': (6, 2, 2), 'count': 7}, {'id': 4, 'dims': (4, 5, 2), 'count': 8},
+                                {'id': 5, 'dims': (3, 6, 2), 'count': 6}]
+        # self.initial_objects = None
         self.num_placed_items = 0  # Counter for placed objects
         self.placed_objects = []  # Stores info about objects successfully placed
         self.item_xy_h_map = {}  # Maps item xy dimensions to their heights
@@ -319,12 +371,15 @@ class PalletPackingEnv(Env):
         self.DO_NOTHING_ACTION_IDX = pallet_dims[0] * pallet_dims[1]  # Index for "do nothing" action
         # --- For Visualization ---
         if toggle_visualization:
-            self._fig = plt.figure()
-            self._axes = [self._fig.add_subplot(121, projection='3d'),
-                          self._fig.add_subplot(122, )]
-            self._colors = {}  # To store a unique color for each object ID
+            self._prepare_visualization()
         # --- Set seed for reproducibility ---
         self.seed(seed)
+
+    def _prepare_visualization(self):
+        self._fig = plt.figure()
+        self._axes = [self._fig.add_subplot(121, projection='3d'),
+                      self._fig.add_subplot(122, )]
+        self._colors = {}  # To store a unique color for each object ID
 
     def _get_object_color(self, obj_id):
         """Assigns a random, consistent color to each object ID."""
@@ -409,10 +464,12 @@ class PalletPackingEnv(Env):
         self.item_xy_h_map = {}
         self.item_xyz_num_dict = {}
         self.xy_to_xyz = {}  # (w,d) or (d,w) -> canonical (w0,d0,h)
-        self.initial_objects = generate_object_classes((
-            self.pallet_dims[0], self.pallet_dims[1], self.pallet_dims[2],),
-            num_classes=self.item_sku,
-            random_hdl=self._np_random, )
+        # self.initial_objects = generate_object_classes((
+        #     self.pallet_dims[0], self.pallet_dims[1], self.pallet_dims[2],),
+        #     num_classes=self.item_sku,
+        #     random_hdl=self._np_random, )
+        # print(self.initial_objects)
+        # print("Initial object classes generated:", self.initial_objects)
         for obj_class in self.initial_objects:
             w0, d0, h0 = obj_class['dims']
             cnt = obj_class['count']
@@ -429,7 +486,8 @@ class PalletPackingEnv(Env):
             #         'id': obj_class['id'],
             #         'dims': obj_class['dims']
             #     })
-        print("Environment Reset.")
+        # print("Environment Reset.")
+        self.state_history = []
         self.state = EnvState(scan_index=0,
                               height_map=height_map,
                               feasibility_map=feasibility_map,
@@ -552,14 +610,16 @@ class PalletPackingEnv(Env):
 
             # --- TODO: Define your reward function ---
             # A simple reward could be the volume of the placed object.
-            reward = REWARD_PLACEMENT_SUCCESS
-            print(f"Action successful: "
-                  f"Placed object ({obj_dims}) at {position}. Reward: {reward}")
+            # reward = REWARD_PLACEMENT_SUCCESS
+            reward = .1
+            # print(f"Action successful: "
+            #       f"Placed object ({obj_dims}) at {position}. Reward: {reward}")
         else:
             # --- TODO: Define your penalty for invalid moves ---
-            reward = REWARD_PLACEMENT_FAILURE  # Penalty for attempting an invalid placement
-            print(f"Action failed: Invalid placement of object ({obj_dims}) at {position}. Penalty: {reward}")
-            self.state = next_state = self.state.do_no_action()
+            # reward = REWARD_PLACEMENT_FAILURE  # Penalty for attempting an invalid placement
+            # print(f"Action failed: Invalid placement of object ({obj_dims}) at {position}. Penalty: {reward}")
+            # self.state = next_state = self.state.do_no_action()
+            return self.state.do_no_action(), REWARD_PLACEMENT_FAILURE, True, {}
         # --- TODO: Define your terminal condition (done) ---
         # if not self.remaining_objects:
         #     done = True
@@ -568,8 +628,8 @@ class PalletPackingEnv(Env):
         if self.state.remaining_items_total == 0 or np.all(
                 (self.pallet_dims[2] - scan_pos[2]) < self.state.remaining_item_height):
             done = True
-            reward = self.state.compactness_wd_pallet_space
-            print("Episode finished: All objects placed.")
+            reward = (self.state.compactness_wd_pallet_space + self.state.pyramid - 2) * 5
+            # print("Episode finished: All objects placed.")
         # The next state, reward, done flag, and an info dict
         return self.state.copy(), reward, done, {}
 
@@ -609,7 +669,7 @@ class PalletPackingEnv(Env):
         cmap.set_bad(color='white')
         # Display the image using the masked array and custom colormap.
         # We subtract 1 in the vmin/vmax to map back to original z-values [0, h-1] for the color scale.
-        im = ax2.imshow(masked_projected_map - 1, cmap=cmap, origin='lower',
+        im = ax2.imshow((masked_projected_map - 1).T, cmap=cmap, origin='lower',
                         interpolation='nearest', vmin=-1, vmax=self.pallet_dims[2] - 1)
         # Add a colorbar to show what height each color represents.
         # cbar = self._fig.colorbar(im, ax=ax2, ticks=np.arange(0, self.pallet_dims[2], 5))
@@ -633,29 +693,40 @@ class PalletPackingEnv(Env):
 
 if __name__ == '__main__':
     # --- Example Usage ---
+    import time
 
     # 1. Define the pallet and the objects to be stacked
-    PALLET_DIMENSIONS = (20, 20, 10)  # (width, height, depth)
+    PALLET_DIMENSIONS = (10, 10, 10)  # (width, height, depth)
     ITEM_SKU = 5
 
     # 2. Create the environment
     env = PalletPackingEnv(PALLET_DIMENSIONS,
                            ITEM_SKU,
+                           seed=np.random.randint(0, 2 ** 30),
                            toggle_visualization=True)
-    observation = env.reset()
-
+    obs = env.reset()
+    print("SKU =", len(env.initial_objects))
+    st = time.time()
     env.render()
+    acc_rews = 0
     total_iter_steps = len(EnvState._grid)
+    a = time.time()
     for i in range(total_iter_steps):
-        print(f"\n--- Iteration {i + 1} ---")
         # Sample a random action (object dimensions and position)
         action = env.sample()
-        observation, reward, done, info = env.step(action)
-        if reward > 0:
-            print(f"Taking action: {action}")
+        next_obs, reward, done, info = env.step(action)
+        acc_rews += reward
+        if done or action != env.DO_NOTHING_ACTION_IDX:
+            print(f"\n--- Iteration {i + 1} ---")
+            # print(f"Taking action: {action} | reward: {reward} | State: {next_obs.scan_index}"
+            #       f" compactness: {next_obs.compactness} | pyramid: {next_obs.pyramid} | ")
             env.render()
+        # input("D")
+        obs = next_obs
         if done:
+            print("Done.")
             break
+    print("Time consumed for all steps:", time.time() - a, "seconds")
     # for i in range(1000):
     #     action = env.sample()
     #     print(f"\n--- Step {i + 1}: Taking action {action} ---")
@@ -664,6 +735,10 @@ if __name__ == '__main__':
     #     if done:
     #         print("Episode has finished.")
     #         break
+    ed = time.time()
+    print("\n--- Summary ---")
+    print("Accumulated reward:", acc_rews)
+    print(f"Total time taken: {ed - st:.2f} seconds")
     print("Compactness of the final state:", env.state.compactness)
     print("Compactness using w,d of pallet of the final state:", env.state.compactness_wd_pallet_space)
     print("Pyramid of the final state:", env.state.pyramid)

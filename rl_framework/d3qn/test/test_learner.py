@@ -38,7 +38,13 @@ def main(cfg):
     save_path = fu.workdir_d3qn / 'run'
     env = PalletPackingEnv(PALLET_DIMENSIONS, item_sku=SKU, )
     network = D3QN(grid_dim=env.pallet_dims[:3],
-                   num_actions=env.action_nums, )
+                   num_actions=env.action_nums,
+                   num_filters=cfg['ddqn']['num_filters'],
+                   num_res_block=cfg['ddqn']['num_res_block'],
+                   head_channels_adv=cfg['ddqn']['head_channels_adv'],
+                   head_channels_val=cfg['ddqn']['head_channels_val'],
+                   manifest_emb_dim=cfg['ddqn']['manifest_emb_dim'],
+                   )
     replay_buffer = ray.remote(PrioritizedReplayBuffer).options(
         scheduling_strategy=NodeAffinitySchedulingStrategy(node_id=ray.get_runtime_context().get_node_id(),
                                                            soft=False)).remote(capacity=10,
@@ -59,6 +65,7 @@ def main(cfg):
                             toggle_visual=False)
     actor.start.remote()
     cfg['rl']['batch_sz'] = 10
+    cfg['rl']['device'] = 'cpu'
     learner = Learner(net=copy.deepcopy(network),
                       cfg=cfg['rl'],
                       shared_state=shared_state,

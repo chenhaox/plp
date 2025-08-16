@@ -9,7 +9,7 @@ import torch
 from agent.agent_nn import D3QN
 from rl_env.env import PalletPackingEnv, generate_object_classes
 
-PALLET_DIMENSIONS = (20, 20, 10)  # (width, height, depth)
+PALLET_DIMENSIONS = (10, 10, 10)  # (width, height, depth)
 SKU = 5
 # ---- Hyper/Config ----
 SEED = 42
@@ -24,7 +24,11 @@ observation = env.reset()
 total_iter_steps = env.total_iter_steps
 # Some D3QN ctors want action count; some infer internally. Adjust as needed.
 d3qn = D3QN(grid_dim=env.pallet_dims[:3],
-            num_actions=env.action_nums, )
+            num_actions=env.action_nums,
+            num_res_block=3,
+            num_filters=24,
+            head_channels_adv=3,
+            head_channels_val=3, )
 d3qn = d3qn.to(DEVICE).eval()
 # Sample a random action (object dimensions and position)
 action = env.sample()
