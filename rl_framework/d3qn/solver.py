@@ -68,7 +68,7 @@ class D3QNSolver:
     def solve(self,
               render: bool = False,
               video_path: Optional[str] = None,
-              fps: int = 10,
+              fps: int = 2,
               dpi: int = 150,
               ) -> Dict[str, Any]:
         """
@@ -106,8 +106,8 @@ class D3QNSolver:
             if shutil.which("ffmpeg") is None:
                 raise RuntimeError("ffmpeg not found on PATH; please install it to write videos.")
             # In headless environments, force a non-interactive backend
-            if not matplotlib.is_interactive():
-                matplotlib.use("Agg", force=True)
+            # if not matplotlib.is_interactive():
+            #     matplotlib.use("Agg", force=True)
 
             fig = getattr(self.env, "_fig", None)
             if fig is None:
@@ -165,6 +165,7 @@ class D3QNSolver:
                             fig.canvas.draw_idle()
                             fig.canvas.flush_events()
                             writer.grab_frame()
+                        t
                 state = next_state
                 t += 1
 
@@ -208,11 +209,11 @@ def main(cfg: Dict[str, Any]) -> None:
     solver = D3QNSolver(env=env.copy(), net=net)
 
     # Load weights if specified in the config
-    p = Path(__file__).parent.joinpath(rf"./run/data/model_1000.chkpt")
+    p = Path(__file__).parent.joinpath(rf"./run/data/model.chkpt")
     solver.load_weights_from_file(str(p))
 
     # Solve the environment and print the result
-    result = solver.solve(render=True, video_path=".")
+    result = solver.solve(render=True, video_path="./demo.mp4")
 
 
 if __name__ == "__main__":
@@ -223,4 +224,4 @@ if __name__ == "__main__":
                       config_name=config_name,
                       version_base='1.3', )(main)
     main()
-    plt.show()
+    # plt.show()
