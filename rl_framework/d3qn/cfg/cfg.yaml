@@ -7,7 +7,7 @@ num_actor: 10
 
 rl:
   # learning rate
-  lr: 1e-3
+  lr: 1e-4
   lr_dcay: 0.90
   # batch size
   batch_sz: 64
@@ -15,16 +15,16 @@ rl:
   gamma: .99
   # epsilon greedy
   eps_max: 1
-  eps_min: .15
+  eps_min: .1
   #  eps_decay: 1e-6
-  eps_decay: 2e-3
+  eps_decay: 1e-3
   # n-step TD error
   n_step: 1
   # randomizer seed
   seed: 999
   # DQN parameters
   ## target network update frequency
-  update_freq: 300
+  update_freq: 500
   ## soft update
   tau: .95
   # Replay buffer parameters

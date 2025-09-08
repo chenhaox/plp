@@ -2,12 +2,17 @@
 Created on 2025/8/9 
 Author: Hao Chen (chen960216@gmail.com)
 """
+import time
+import shutil
+import contextlib
 from pathlib import Path
 from typing import Optional, Dict, Any, List
 
 import numpy as np
 import torch
 import hydra
+import matplotlib
+from matplotlib.animation import FFMpegWriter
 
 from agent.agent_nn import D3QN
 from rl_env.env import PalletPackingEnv, EnvState
@@ -60,7 +65,12 @@ class D3QNSolver:
     # Rollout / Solve
     # ------------------------------
     @torch.no_grad()
-    def solve(self, render: bool = False) -> Dict[str, Any]:
+    def solve(self,
+              render: bool = False,
+              video_path: Optional[str] = None,
+              fps: int = 10,
+              dpi: int = 150,
+              ) -> Dict[str, Any]:
         """
         Runs one evaluation episode from env.reset() until done or step cap.
 
@@ -89,6 +99,26 @@ class D3QNSolver:
         if render:
             self.env._prepare_visualization()
 
+        # --------- video setup (optional) ---------
+        writer = None
+        fig = None
+        if video_path:
+            if shutil.which("ffmpeg") is None:
+                raise RuntimeError("ffmpeg not found on PATH; please install it to write videos.")
+            # In headless environments, force a non-interactive backend
+            if not matplotlib.is_interactive():
+                matplotlib.use("Agg", force=True)
+
+            fig = getattr(self.env, "_fig", None)
+            if fig is None:
+                # fallback to current figure if env didn't create one yet
+                fig = plt.gcf()
+
+            writer = FFMpegWriter(fps=fps, metadata={"artist": "D3QNSolver"}, codec="libx264")
+            video_ctx = writer.saving(fig, str(video_path), dpi=dpi)
+        else:
+            video_ctx = contextlib.nullcontext()
+
         # A small helper to choose action with (possible) eval epsilon
         def pick_action(s: EnvState) -> int:
             # otherwise greedy over feasible set using your utility
@@ -108,43 +138,55 @@ class D3QNSolver:
         # rollout
         t = 0
         done = False
-        while not done:
-            action = pick_action(state)
-            next_state, reward, done, info = self.env.step(action)
-            total_reward += float(reward)
-            # minimal (compact) snapshot — adjust to your needs
-            trace.append({
-                "t": t,
-                "action": int(action),
-                "reward": float(reward),
-                "info": info if isinstance(info, dict) else {},
-            })
-            if action != self.env.DO_NOTHING_ACTION_IDX:
+        with video_ctx:
+            # initial frame
+            if render and hasattr(self.env, "render"):
+                self.env.render()
+                if writer:
+                    writer.grab_frame()
+            while not done:
+                action = pick_action(state)
+                next_state, reward, done, info = self.env.step(action)
+                total_reward += float(reward)
+                # minimal (compact) snapshot — adjust to your needs
+                trace.append({
+                    "t": t,
+                    "action": int(action),
+                    "reward": float(reward),
+                    "info": info if isinstance(info, dict) else {},
+                })
+                # draw + capture
                 if render and hasattr(self.env, "render"):
-                    self.env.render()
-                    print(f"Step {t}: action={action}, reward={reward}, done={done}, info={info}")
-            state = next_state
-            t += 1
+                    # If you only want frames when something is placed, set record_every_step=False
+                    if action != self.env.DO_NOTHING_ACTION_IDX:
+                        self.env.render()
+                        if writer:
+                            # ensure canvas is up-to-date then capture
+                            fig.canvas.draw_idle()
+                            fig.canvas.flush_events()
+                            writer.grab_frame()
+                state = next_state
+                t += 1
 
-        print("\n--- Summary ---")
-        print("Accumulated reward:", total_reward)
-        print("Compactness of the final state:", state.compactness)
-        print("Compactness using w,d of pallet of the final state:", state.compactness_wd_pallet_space)
-        print("Pyramid of the final state:", state.pyramid)
-        print("Number of placed items:", self.env.num_placed_items, "out of", sum(
-            [v['count'] for v in self.env.initial_objects]
-        ))
-        print("\nSimulation finished. Close the plot window to exit.")
-        result = {
-            "total_reward": float(total_reward),
-            "steps": int(t),
-            "done": bool(done),
-            "trace": trace,
-            "final_state": {
-                # place anything you want to export; keeping it light here
-                "dp_coord": getattr(state, "dp_coord", None).tolist() if hasattr(state, "dp_coord") else None,
-            },
-        }
+            print("\n--- Summary ---")
+            print("Accumulated reward:", total_reward)
+            print("Compactness of the final state:", state.compactness)
+            print("Compactness using w,d of pallet of the final state:", state.compactness_wd_pallet_space)
+            print("Pyramid of the final state:", state.pyramid)
+            print("Number of placed items:", self.env.num_placed_items, "out of", sum(
+                [v['count'] for v in self.env.initial_objects]
+            ))
+            print("\nSimulation finished. Close the plot window to exit.")
+            result = {
+                "total_reward": float(total_reward),
+                "steps": int(t),
+                "done": bool(done),
+                "trace": trace,
+                "final_state": {
+                    # place anything you want to export; keeping it light here
+                    "dp_coord": getattr(state, "dp_coord", None).tolist() if hasattr(state, "dp_coord") else None,
+                },
+            }
         return result
 
 
@@ -166,11 +208,11 @@ def main(cfg: Dict[str, Any]) -> None:
     solver = D3QNSolver(env=env.copy(), net=net)
 
     # Load weights if specified in the config
-    p = Path(__file__).parent.joinpath(r"./run/data/model.chkpt")
+    p = Path(__file__).parent.joinpath(rf"./run/data/model_1000.chkpt")
     solver.load_weights_from_file(str(p))
 
     # Solve the environment and print the result
-    result = solver.solve(render=True)
+    result = solver.solve(render=True, video_path=".")
 
 
 if __name__ == "__main__":
@@ -181,4 +223,4 @@ if __name__ == "__main__":
                       config_name=config_name,
                       version_base='1.3', )(main)
     main()
-    # plt.show()
+    plt.show()

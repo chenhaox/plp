@@ -146,9 +146,12 @@ class D3QN(nn.Module):
 
         # Advantage head (spatial): [B, C, W, D] -> [B, 1, W, D] -> [B, W*D]
         self.adv_head_spatial = nn.Sequential(
-            nn.Conv2d(num_filters, head_channels_adv, kernel_size=1, bias=False),
+            nn.Conv2d(num_filters, head_channels_adv, kernel_size=3, padding=1, bias=False),
             nn.ELU(),
-            nn.Conv2d(head_channels_adv, 1, kernel_size=1, bias=True),
+            nn.Flatten(),
+            nn.Linear(
+                head_channels_adv * self.W * self.D, num_actions
+            )
         )
 
         # Value head (global): [B, C, W, D] -> GAP -> [B, C] -> [B, 1]
@@ -157,9 +160,6 @@ class D3QN(nn.Module):
             nn.ELU(),
         )
         self.val_fc = nn.Linear(head_channels_val, 1)
-        # DoNothing advantage logit from pooled features
-        self.pool_for_dn = nn.AdaptiveAvgPool2d((1, 1))
-        self.donothing_fc = nn.Linear(num_filters, 1)
 
         # Register coord maps (buffers so they travel with device/dtype)
         xx, yy = torch.meshgrid(
@@ -219,15 +219,7 @@ class D3QN(nn.Module):
         # value = self.val_head(f)  # [B, 1]
         # q = value + advantage - advantage.mean(dim=1, keepdim=True)
         # Per-cell advantages (flatten to [B, W*D])
-        adv_map = self.adv_head_spatial(f).squeeze(1)  # [B, W, D]
-        adv_flat = adv_map.flatten(start_dim=1)  # [B, W*D]
-
-        # DoNothing advantage
-        pooled = self.pool_for_dn(f).squeeze(-1).squeeze(-1)  # [B, C]
-        adv_dn = self.donothing_fc(pooled)  # [B, 1]
-
-        advantage = torch.cat([adv_flat, adv_dn], dim=1)  # [B, W*D+1]
-
+        advantage = self.adv_head_spatial(f)  # [B, 1]
         # State value
         v_feat = self.val_head_global(f)  # [B, C', W, D]
         v_gap = v_feat.mean(dim=(2, 3))  # [B, C']

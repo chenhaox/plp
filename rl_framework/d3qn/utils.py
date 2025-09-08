@@ -21,6 +21,29 @@ def padding(size, array):
     return pad_array
 
 
+def feasible_action_to_mask(state_feasible_action_set: torch.Tensor, num_actions: int):
+    """
+    Convert a feasible action index tensor to a mask tensor where:
+    - feasible action indices are set to 1
+    - other indices are set to 0
+
+    Args:
+    - state_feasible_action_set (torch.Tensor): Tensor of shape [B, N] where each element is an action index
+    - num_actions (int): Total number of possible actions (size of mask dimension)
+
+    Returns:
+    - torch.Tensor: Mask tensor of shape [B, num_actions] with 1s for feasible actions and 0s elsewhere
+    """
+    # Initialize the mask tensor of zeros
+    mask = torch.zeros(state_feasible_action_set.size(0), num_actions, dtype=torch.bool,
+                       device=state_feasible_action_set.device, )
+
+    # Scatter 1s at the indices of feasible actions
+    mask.scatter_(1, state_feasible_action_set, 1)
+
+    return mask
+
+
 class CsvWriter:
     """A logging object writing to a CSV file.
 
@@ -148,6 +171,7 @@ class Trajectory(object):
         self.action_nums = action_nums
         self.gamma = gamma  # Discount factor
         self.states = []
+        self.state_feasible_actions = []
         self.actions = []
         self.rewards = []
         self.next_states = []
@@ -160,12 +184,14 @@ class Trajectory(object):
                        reward,
                        next_state,
                        done,
+                       state_feasible_actions,
                        next_state_feasible_actions):
         self.states.append(state)
         self.actions.append(action)
         self.rewards.append(reward)
         self.next_states.append(next_state)
         self.dones.append(done)
+        self.state_feasible_actions.append(state_feasible_actions)
         self.next_state_feasible_actions.append(next_state_feasible_actions)
 
     def compute_n_step_return(self, start_index, end_index):
@@ -209,6 +235,8 @@ class Trajectory(object):
                 height_maps_next.append(st.height_map)
             states_hm = [st.height_map for st in self.states[index]]
             states_dp = [st.dp_coord for st in self.states[index]]
+            state_feasible_actions = [padding(feasible_action_dim, st) for st in
+                                      self.state_feasible_actions[index]]
             next_states_hm = [st.height_map for st in self.next_states[index]]
             next_states_dp = [st.dp_coord for st in self.next_states[index]]
             next_state_feasible_actions = [padding(feasible_action_dim, st) for st in
@@ -221,6 +249,7 @@ class Trajectory(object):
             return SampleBatch({'states_hm': states_hm,
                                 'states_dp': states_dp,
                                 'states_manifest': states_manifest,
+                                'state_feasible_action': state_feasible_actions,
                                 'action': actions,
                                 'reward': rewards,
                                 'next_states_hm': next_states_hm,
@@ -235,6 +264,7 @@ class Trajectory(object):
             next_state_hm = self.next_states[index].height_map
             next_state_dp = self.next_states[index].dp_coord
             feasible_action_dim = len(self.states[index].item_xyz_num_dict) * 2 + 1
+            state_feasible_actions = padding(feasible_action_dim, self.state_feasible_actions[index])
             next_state_feasible_actions = padding(feasible_action_dim, self.next_state_feasible_actions[index])
             states_manifest = self.states[index].manifest
             next_states_manifest = self.next_states[index].manifest
@@ -245,6 +275,7 @@ class Trajectory(object):
             return SampleBatch({'states_hm': [state_hm],
                                 'states_dp': [state_dp],
                                 'states_manifest': [states_manifest],
+                                'state_feasible_action': [state_feasible_actions],
                                 'action': [action],
                                 'reward': [reward],
                                 'next_states_hm': [next_state_hm],

@@ -12,7 +12,7 @@ import copy
 from pathlib import Path
 from typing import NamedTuple
 from rl_env.env import PalletPackingEnv, EnvState
-from rl_framework.d3qn.utils import CsvWriter, write_to_csv, get_time_stamp, Trajectory
+from rl_framework.d3qn.utils import CsvWriter, write_to_csv, get_time_stamp, Trajectory, feasible_action_to_mask
 
 MAX_NUM_PENDING_TASKS = 100
 MAX_SEND_PERIOD = 0
@@ -134,10 +134,15 @@ def dqn_select_action(feasible_action_set: np.ndarray,
         q = dqn(height_map=obs[0],
                 dp_xy=obs[1],
                 z_start=obs[2],
-                manifest=obs[3], ).detach().squeeze(0).squeeze()
+                manifest=obs[3],
+                action_mask=feasible_action_to_mask(torch.as_tensor(feasible_action_set, device=device).unsqueeze(0),
+                                                    np.prod(state.pallet_space.shape[:2]) + 1)
+                ).detach().squeeze(0).squeeze()
         if q.ndim != 1:
             raise RuntimeError(f"DQN must return 1D action-values, got shape {tuple(q.shape)}")
-        feasible_action_set = torch.as_tensor(feasible_action_set, dtype=torch.int64, device=device)
+        feasible_action_set = torch.as_tensor(feasible_action_set,
+                                              dtype=torch.int64,
+                                              device=device)
         selected_action = feasible_action_set[q[feasible_action_set].argmax()].item()
     return ActorAction(
         action_value=q.cpu().numpy(),
@@ -295,23 +300,27 @@ class Actor(object):
                     raise ValueError(f"Invalid action selected by actor {self._actor_id}: {action.action_select}")
                 # step
                 next_state, reward, done, _ = self.env.step(action.action_select)  # next_state reward done
-                if reset_cnt == reset_num:
+                if next_state.scan_index >= reset_num - 1:
                     done = True
                 # update score, coutner
                 score += reward  # reward
                 reset_cnt += 1
                 step += 1
-                if done or action.action_select != self.env.DO_NOTHING_ACTION_IDX:
-                    # store trajectory
-                    traj.add_transition(state,
-                                        action.action_select,
-                                        reward,
-                                        next_state,
-                                        done,
-                                        next_state_feasible_actions=env.cal_feasible_action(
-                                            next_state.dp_coord,
-                                            next_state
-                                        ), )
+                # if done or action.action_select != self.env.DO_NOTHING_ACTION_IDX:
+                # store trajectory
+                traj.add_transition(state,
+                                    action.action_select,
+                                    reward,
+                                    next_state,
+                                    done,
+                                    state_feasible_actions=env.cal_feasible_action(
+                                        state.dp_coord,
+                                        state
+                                    ),
+                                    next_state_feasible_actions=env.cal_feasible_action(
+                                        next_state.dp_coord,
+                                        next_state
+                                    ), )
                 # reset state# reset state
                 state = next_state
                 # update
@@ -322,10 +331,10 @@ class Actor(object):
                     # TODO addd
                     self.trajectory_list.append(traj)
                     break
-                if reset_cnt % reset_num == 0:
-                    # TODO
-                    self.trajectory_list.append(traj)
-                    break
+                # if reset_cnt % reset_num == 0:
+                #     # TODO
+                #     self.trajectory_list.append(traj)
+                #     break
             end_ep_t = time.time()
             # linearly decrease epsilon
             self.epsilon_scheduler.step()

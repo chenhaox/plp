@@ -380,6 +380,8 @@ class PalletPackingEnv(Env):
         self._axes = [self._fig.add_subplot(121, projection='3d'),
                       self._fig.add_subplot(122, )]
         self._colors = {}  # To store a unique color for each object ID
+        for i in self.initial_objects:
+            self._colors.setdefault(i['id'], self._get_object_color(i['id']))
 
     def _get_object_color(self, obj_id):
         """Assigns a random, consistent color to each object ID."""
@@ -408,6 +410,16 @@ class PalletPackingEnv(Env):
                 # collision-free check at current z slice
                 sub = state.pallet_space[x0:x0 + fw, y0:y0 + fd, z0:z0 + h0]
                 if np.any(sub):
+                    continue
+                # 6) Precise stability check using your physics/CoG model
+                item = Item(dimensions=(fw, fd, h0), position=(x0, y0, z0))
+                stab = calculate_stability(
+                    item,
+                    state.height_map,
+                    state.feasibility_map,
+                    cog_uncertainty_ratio=self.cog_uncertainty_ratio,
+                )
+                if not stab.get("is_stable", False):
                     continue
                 # mark the endpoint cell (right/back at same z)
                 x_end = x0 + fw
@@ -464,6 +476,7 @@ class PalletPackingEnv(Env):
         self.item_xy_h_map = {}
         self.item_xyz_num_dict = {}
         self.xy_to_xyz = {}  # (w,d) or (d,w) -> canonical (w0,d0,h)
+        self.item_xy_id_map = {}  # (w,d) or (d,w) -> unique id for color
         # self.initial_objects = generate_object_classes((
         #     self.pallet_dims[0], self.pallet_dims[1], self.pallet_dims[2],),
         #     num_classes=self.item_sku,
@@ -481,6 +494,9 @@ class PalletPackingEnv(Env):
             # whichever orientation is used, decrement the canonical key
             self.xy_to_xyz[(w0, d0)] = (w0, d0, h0)
             self.xy_to_xyz[(d0, w0)] = (w0, d0, h0)
+            #  Map footprint to unique id for visualization
+            self.item_xy_id_map[(w0, d0)] = obj_class['id']
+            self.item_xy_id_map[(d0, w0)] = obj_class['id']
             # for _ in range(obj_class['count']):
             #     self.remaining_objects.append({
             #         'id': obj_class['id'],
@@ -493,6 +509,48 @@ class PalletPackingEnv(Env):
                               feasibility_map=feasibility_map,
                               pallet_space=pallet_space,
                               item_xyz_num_dict=self.item_xyz_num_dict)
+        return self.state
+
+    def set_state(self, new_state: EnvState):
+        """
+        Sets the environment to a specific state.
+
+        Args:
+            state (EnvState): The state to set the environment to.
+        """
+        assert isinstance(new_state, EnvState), "state must be an instance of EnvState."
+        # --- 1) Shape/dimension invariants must match current env ---
+        # Work on a copy to avoid external mutation
+        s = new_state.copy()
+        dims = s.pallet_space.shape  # (X, Y, Z)
+        # Ensure the global scan grid matches dims
+        if EnvState._grid is None or dims != self.pallet_dims:
+            EnvState.init_env(dims)
+        # Clamp scan index to valid range for the current grid
+        N = len(EnvState._grid)
+        s.scan_index = int(np.clip(s.scan_index, 0, N - 1))
+        # Adopt state
+        self.state = s
+        # Update env dims & action space if needed
+        if dims != self.pallet_dims:
+            self.pallet_dims = dims
+            self.action_space = spaces.Discrete(dims[0] * dims[1] + 1)
+            self.action_nums = self.action_space.n
+            self.DO_NOTHING_ACTION_IDX = dims[0] * dims[1]
+            self.total_scan_num = int(np.prod(dims))
+            self.total_iter_steps = len(EnvState._grid)
+        # Sync inventory-derived lookup tables
+        self.item_xyz_num_dict = self.state.item_xyz_num_dict.copy() if self.state.item_xyz_num_dict else {}
+        self.item_xy_h_map = {}
+        self.xy_to_xyz = {}
+        for (w, d, h), _cnt in self.item_xyz_num_dict.items():
+            self.item_xy_h_map[(w, d)] = h
+            self.item_xy_h_map[(d, w)] = h
+            self.xy_to_xyz[(w, d)] = (w, d, h)
+            self.xy_to_xyz[(d, w)] = (w, d, h)
+        self.num_placed_items = 0  # Reset the counter for placed objects
+        self.placed_objects = []
+        self.state_history = []
         return self.state
 
     def _any_feasible_move_exists(self) -> bool:
@@ -569,10 +627,11 @@ class PalletPackingEnv(Env):
             self.state_history.append(self.state)
             done = False
             reward = REWARD_NO_ACTION
+            # TODO 可能不触发？
             if self.state.remaining_items_total == 0 or np.all(
                     (self.pallet_dims[2] - scan_pos[2]) < self.state.remaining_item_height):
                 done = True
-                reward = self.state.compactness_wd_pallet_space
+                reward = (self.state.compactness_wd_pallet_space + self.state.pyramid - 2) * 5
             return self.state.copy(), reward, done, {}
         elif not (0 <= action <= np.prod(self.pallet_dims[:2])):
             raise ValueError(f"Action {action} is out of bounds for pallet area {self.pallet_dims[:2]}.")
@@ -602,7 +661,7 @@ class PalletPackingEnv(Env):
             # Store placement info for visualization and tracking
             self.num_placed_items += 1
             self.placed_objects.append({
-                'id': self.num_placed_items,
+                'id': self.item_xy_id_map[(fw, fd)],
                 'dims': obj_dims,
                 'pos': position
             })
@@ -652,7 +711,8 @@ class PalletPackingEnv(Env):
         # Draw the pallet base (optional, for visual context)
         for item in self.placed_objects:
             item = Item(dimensions=item['dims'],
-                        position=item['pos'])
+                        position=item['pos'],
+                        color=self._colors[item['id']])
             draw_cuboid(ax1, item)
 
         # --- 2. Feasibility Map ---
@@ -718,8 +778,8 @@ if __name__ == '__main__':
         acc_rews += reward
         if done or action != env.DO_NOTHING_ACTION_IDX:
             print(f"\n--- Iteration {i + 1} ---")
-            # print(f"Taking action: {action} | reward: {reward} | State: {next_obs.scan_index}"
-            #       f" compactness: {next_obs.compactness} | pyramid: {next_obs.pyramid} | ")
+            print(f"Taking action: {action} | reward: {reward} | State: {next_obs.scan_index}"
+                  f" compactness: {next_obs.compactness} | pyramid: {next_obs.pyramid} | ")
             env.render()
         # input("D")
         obs = next_obs

@@ -16,8 +16,7 @@ import ray
 import numpy as np
 from rl_env.env import PalletPackingEnv
 import file_utils as fu
-from rl_framework.d3qn.utils import CsvWriter, write_to_csv
-from rl_framework.d3qn.utils import get_time_stamp
+from rl_framework.d3qn.utils import CsvWriter, write_to_csv, feasible_action_to_mask, get_time_stamp
 from ray.rllib.policy.sample_batch import SampleBatch
 
 prior_eps: float = 1e-6
@@ -152,18 +151,27 @@ class Learner(object):
         action = torch.as_tensor(samples["action"].copy().reshape(-1, 1), dtype=torch.int64, device=device)
         reward = torch.as_tensor(samples["reward"].copy().reshape(-1, 1), dtype=torch.float32, device=device)
         done = torch.as_tensor(samples["done"].copy().reshape(-1, 1), dtype=torch.float32, device=device)
+        state_feasible_action_set = torch.as_tensor(samples['state_feasible_action'].copy(),
+                                                    dtype=torch.int64, device=device)
+        state_feasible_action_mask = feasible_action_to_mask(state_feasible_action_set, self.dqn.num_actions)
         next_state_feasible_action_set = torch.as_tensor(samples['next_state_feasible_action'].copy(),
                                                          dtype=torch.int64, device=device)
+        next_state_feasible_action_mask = feasible_action_to_mask(next_state_feasible_action_set,
+                                                                  self.dqn.num_actions)
         # Q net, Q' target net, s current state, s' next state
         # double DQN Q(s, a) = r + y * Q'(s', argmax_a Q(s', a))
         curr_q_table_online = self.dqn(height_map=state_hm,
                                        dp_xy=state_dp[..., :2],
                                        z_start=state_dp[..., [2]],
-                                       manifest=state_manifest)
+                                       manifest=state_manifest,
+                                       action_mask=state_feasible_action_mask
+                                       )
         next_q_table_online = self.dqn(height_map=next_state_hm,
                                        dp_xy=next_state_dp[..., :2],
                                        z_start=next_state_dp[..., [2]],
-                                       manifest=next_state_manifest).detach()
+                                       manifest=next_state_manifest,
+                                       action_mask=next_state_feasible_action_mask,
+                                       ).detach()
         curr_q_value_online = curr_q_table_online.gather(1, action)
         argmax_next_state_feasible_action = next_state_feasible_action_set.gather(1, next_q_table_online
                                                                                   .gather(1,
@@ -172,7 +180,9 @@ class Learner(object):
         next_q_value_target = self.dqn_target(height_map=next_state_hm,
                                               dp_xy=next_state_dp[..., :2],
                                               z_start=next_state_dp[..., [2]],
-                                              manifest=next_state_manifest).detach().gather(  # Double DQN
+                                              manifest=next_state_manifest,
+                                              action_mask=next_state_feasible_action_mask,
+                                              ).detach().gather(  # Double DQN
             1, argmax_next_state_feasible_action)
         mask = 1 - done
         # target = value_rescale((reward + gamma * inverse_value_rescale(next_q_value) * mask).to(self.device))

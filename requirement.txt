@@ -4,3 +4,4 @@ matplotlib
 ray[all]
 hydra-core
 gym
+graphviz
